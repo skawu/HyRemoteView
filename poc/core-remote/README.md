@@ -35,8 +35,8 @@ buildable on Windows and Linux. Qt appears only where the HyRemote runtime fixtu
 
 | Layer | What it is | What it proves |
 | --- | --- | --- |
-| `tools/hyremote_runtime_fixture` | `POC_ONLY` driver that compiles HyRemote's **unmodified** `rfb_transport.cpp` / `vnc_auth.cpp` and drives it with a scripted deterministic frame sequence. | The real HyRemote runtime RFB transport is correctly driven by this client, including resize, damage and input semantics. |
-| `tests/scripted_server.*` | `POC_ONLY` test double that implements the server side of the wire contract directly. | Negative/bounds, malformed input, truncation, overflow and mid-message disconnect, which a conformant server never produces. |
+| `hyremote_fixture/` | `POC_ONLY` driver that compiles HyRemote's **unmodified** `rfb_transport.cpp` / `vnc_auth.cpp` and drives it with the shared deterministic content through a control channel. | The real HyRemote runtime RFB transport is correctly driven by this client, including resize, damage and input semantics, and its VNC authentication agrees with the client's DES. |
+| `src/harness/scripted_server.*` | `POC_ONLY` test double that implements the server side of the wire contract directly. | Negative/bounds, malformed input, truncation, overflow and mid-message disconnect, which a conformant server never produces. |
 
 The test double exists because negative tests need a server that intentionally violates the
 protocol. It is never used as product code and never replaces the runtime fixture.
@@ -50,24 +50,73 @@ hash, and the probe prints both so the evidence can be re-derived.
 
 ## Build
 
+The client core and the test double need no third-party dependency, so this build needs nothing but a
+C++17 compiler:
+
 ```text
 cmake -S poc/core-remote -B build/core-remote -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/core-remote
 ctest --test-dir build/core-remote --output-on-failure
 ```
 
-The client core and the test double need no third-party dependency. The HyRemote runtime fixture is
-configured only when a HyRemote checkout is provided:
+The HyRemote runtime fixture is built by a second configuration that points at an unmodified HyRemote
+checkout. Qt is only needed here, because the HyRemote runtime itself needs it:
 
 ```text
-cmake -S poc/core-remote -B build/core-remote -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DPOC_HYREMOTE_SOURCE_DIR=<path-to-HyRemote-checkout>
+cmake -S poc/core-remote -B build/hyremote-fixture -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH=<Qt6 prefix> \
+      -DOPENSSL_ROOT_DIR=<OpenSSL root, when POC_HYREMOTE_WITH_SECURITY=ON> \
+      -DPOC_CORE_REMOTE_BUILD_TESTS=OFF \
+      -DPOC_HYREMOTE_SOURCE_DIR=<unmodified HyRemote checkout> \
+      -DPOC_HYREMOTE_WITH_SECURITY=ON
+cmake --build build/hyremote-fixture
 ```
+
+`POC_HYREMOTE_WITH_SECURITY=ON` mirrors HyRemote's own `HYREMOTE_WITH_TRANSPORT_SECURITY` and is what
+makes VNC authentication (security type 2) reachable.
+
+## Findings recorded by this harness
+
+* **HyRemote accepts a `RFB 003.007` client version but always frames the security offer in the 3.8
+  form.** `src/runtime/src/transport/rfb_transport.cpp` accepts `version.mid(8, 3) == "007"` and then
+  writes the 3.8 `{count, type...}` offer unconditionally. An RFC 6143-conformant 3.7 peer reads a
+  4-byte security type instead, so it desynchronises and is closed by the transport's handshake bound
+  (`ProtocolFailure` at 3000 ms). Reproduced by `--scenario handshake --version 37` against the
+  unmodified runtime; the same run with `--version lenient37` completes. Impact is narrow, because the
+  runtime announces `RFB 003.008` and a peer that follows that announcement negotiates 3.8 anyway.
+  Reported upstream rather than patched here: this repository must not carry a runtime change.
 
 ## Running the probe
 
+Start one fixture, read the ports it prints, run one scenario, and let the scenario stop the fixture
+again. A fresh fixture per scenario keeps every run reproducible: the fixture always starts holding
+deterministic step 0 and an empty input log.
+
 ```text
-build/core-remote/rfb-probe --scenario determinism --port <port> --json
-build/core-remote/rfb-probe --scenario input-semantics --port <port> --json
-build/core-remote/rfb-probe --scenario reconnect --port <port> --json
+build/hyremote-fixture/hyremote-runtime-fixture --security none
+#   READY transport_port=<T> control_port=<C>
+
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario handshake
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario determinism
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario input-semantics
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario reconnect
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario clipboard
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario determinism --set-pixel-format 565be
 ```
+
+VNC authentication needs a credential, and a credential never comes from a command line:
+
+```text
+# set POC_S3CRET in the environment of both processes
+build/hyremote-fixture/hyremote-runtime-fixture --security vnc --password-env POC_S3CRET
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario handshake \
+                                 --security vnc --password-env POC_S3CRET
+
+# the client's DES against HyRemote's own OpenSSL-based implementation, same challenge, same password
+build/hyremote-fixture/rfb-probe --port <T> --control-port <C> --scenario des-crosscheck \
+                                 --password-env POC_S3CRET
+```
+
+A scenario prints its findings and ends with `SCENARIO_RESULT=PASS` or `SCENARIO_RESULT=FAIL`, and the
+process exit code matches. A scenario that is *expected* to be refused (a wrong credential, a strict
+3.7 negotiation) correctly reports `SCENARIO_RESULT=FAIL` with the deterministic error code in it.
