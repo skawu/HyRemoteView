@@ -1,0 +1,21 @@
+# Build trees (out-of-source only; the PoC never builds in the source tree)
+/build/
+/build-*/
+/out/
+/cmake-build-*/
+
+# Local toolchain / IDE state
+.vs/
+.vscode/
+.cache/
+compile_commands.json
+
+# Agent working state is not part of the PoC deliverable
+.codebuddy/
+
+# Local evidence scratch space captured while running the harness
+poc/**/evidence-out/
+
+# OS noise
+Thumbs.db
+.DS_Store
