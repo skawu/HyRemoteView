@@ -10,4 +10,13 @@ function(poc_add_test name)
     set_tests_properties(${name} PROPERTIES TIMEOUT 300)
 endfunction()
 
+# No server needed.
 poc_add_test(poc-core-remote-test-boundary test_boundary.cpp)
+poc_add_test(poc-core-remote-test-primitives test_rfb_primitives.cpp)
+
+# Against the POC_ONLY scripted double.
+poc_add_test(poc-core-remote-test-handshake test_handshake.cpp)
+poc_add_test(poc-core-remote-test-framebuffer test_framebuffer.cpp)
+poc_add_test(poc-core-remote-test-input-semantics test_input_semantics.cpp)
+poc_add_test(poc-core-remote-test-negative-bounds test_negative_bounds.cpp)
+poc_add_test(poc-core-remote-test-connection-lifecycle test_connection_lifecycle.cpp)
