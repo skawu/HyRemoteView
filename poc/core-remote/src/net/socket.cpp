@@ -22,6 +22,7 @@ static constexpr SocketHandle kBadSocket = INVALID_SOCKET;
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  include <sys/select.h>
+#  include <sys/ioctl.h>  // ioctl(FIONREAD) for Socket::available() on POSIX
 #  include <sys/socket.h>
 #  include <unistd.h>
 using SocketHandle = int;
